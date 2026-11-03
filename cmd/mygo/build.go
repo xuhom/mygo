@@ -13,14 +13,15 @@ import (
 )
 
 type buildOptions struct {
-	debug         bool
-	sign          string // macOS signing identity
-	skipDMG       bool
-	skipNotarize  bool
-	skipInstaller bool              // no Windows installer, nor NSIS for it
-	pkg           string            // directory of the main package
-	work          string            // for generated files
-	overlay       map[string]string // go build -overlay entries (the frontend)
+	debug             bool
+	mobileProjectOnly bool   // emit a mobile host project without invoking its SDK
+	sign              string // macOS signing identity
+	skipDMG           bool
+	skipNotarize      bool
+	skipInstaller     bool              // no Windows installer, nor NSIS for it
+	pkg               string            // directory of the main package
+	work              string            // for generated files
+	overlay           map[string]string // go build -overlay entries (the frontend)
 }
 
 func runBuild(args []string) error {
@@ -56,8 +57,16 @@ update-<platform>.json: publish them where updates point to.
 
 The platform web (or js/wasm) builds an app of native UI for browsers into
 <out>/web: index.html, which loads the app, Go's wasm_exec.js and the app's
-WebAssembly, named by its content: a static site, to serve from anywhere.`)
-	platforms := flags.String("platform", runtime.GOOS+"/"+runtime.GOARCH, "comma separated GOOS/GOARCH targets, e.g. darwin/universal,linux/amd64,windows/amd64, or web for browsers")
+WebAssembly, named by its content: a static site, to serve from anywhere.
+
+Experimental mobile targets ios, ios-simulator and android package native UI
+through the browser backend (Go WASM inside a system WebView). They do not
+support desktop WebView apps or native Go plugins. iOS needs Xcode on macOS;
+Android needs Gradle 8.13 or 8.14, JDK 17 and Android SDK 36. Use -mobile-project-only
+to generate the host project without invoking Xcode or Gradle. Device iOS
+builds are unsigned; configure signing in the generated Xcode project.`)
+	platforms := flags.String("platform", runtime.GOOS+"/"+runtime.GOARCH, "comma separated GOOS/GOARCH targets, e.g. darwin/universal,linux/amd64,windows/amd64, or web, ios, ios-simulator, android")
+	mobileProjectOnly := flags.Bool("mobile-project-only", false, "generate mobile host projects and WASM without compiling the native host")
 	debug := flags.Bool("debug", false, "keep development features such as the web inspector")
 	skipBuildCommand := flags.Bool("skip-build-command", false, "do not run buildCommand")
 	skipDMG := flags.Bool("skip-dmg", false, "do not create a disk image for macOS")
@@ -76,6 +85,10 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 	if *out != "" {
 		c.Out = *out
 	}
+	// Reject incompatible mobile options before generators or buildCommand run.
+	if err := validateMobileBuild(c, splitList(*platforms), *mobileProjectOnly, *upload); err != nil {
+		return err
+	}
 	// The catalogs name the languages the packages declare.
 	if _, err := c.languages(); err != nil {
 		return err
@@ -85,7 +98,7 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 			return err
 		}
 	}
-	opts := buildOptions{debug: *debug, sign: c.MacOS.SigningIdentity, skipDMG: *skipDMG, skipNotarize: *skipNotarize, skipInstaller: *skipInstaller}
+	opts := buildOptions{mobileProjectOnly: *mobileProjectOnly, debug: *debug, sign: c.MacOS.SigningIdentity, skipDMG: *skipDMG, skipNotarize: *skipNotarize, skipInstaller: *skipInstaller}
 	if *sign != "" {
 		opts.sign = *sign
 	}
@@ -140,6 +153,14 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 
 	var built []string
 	for _, p := range splitList(*platforms) {
+		if isMobilePlatform(p) {
+			paths, err := buildMobile(c, p, opts)
+			built = append(built, paths...)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if isWebPlatform(p) {
 			paths, err := buildWeb(c, opts)
 			built = append(built, paths...)

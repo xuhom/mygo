@@ -1,0 +1,69 @@
+name: Experimental mobile packaging
+
+on:
+  push:
+    branches: [mobile]
+  pull_request:
+    paths:
+      - cmd/mygo/build.go
+      - cmd/mygo/mobile*
+      - cmd/mygo/mobile_templates/**
+      - cmd/mygo/web.go
+      - .github/workflows/mobile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./cmd/mygo -run 'TestMobile|TestBuildMobileProjects'
+      - name: Build iPhone and iPad hosts (unsigned)
+        run: go run ./cmd/mygo build -platform ios,ios-simulator examples/counter-native
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-wasm-hosts
+          path: examples/counter-native/dist/ios*
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Install Android SDK platform
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build installable debug APK
+        run: go run ./cmd/mygo build -platform android -debug examples/counter-native
+      - name: Build unsigned release APK
+        run: go run ./cmd/mygo build -platform android -o dist/mobile-release examples/counter-native
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-wasm-hosts
+          path: |
+            examples/counter-native/dist/android
+            examples/counter-native/dist/mobile-release/android

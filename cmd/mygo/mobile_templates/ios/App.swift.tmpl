@@ -1,0 +1,107 @@
+import UIKit
+import WebKit
+import UniformTypeIdentifiers
+
+// The Go application runs in WebAssembly; UIKit owns the process lifecycle.
+@main
+final class AppDelegate: UIResponder, UIApplicationDelegate {
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "MyGo", sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
+    }
+}
+
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let scene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = AppViewController()
+        window.makeKeyAndVisible()
+        self.window = window
+    }
+}
+
+final class AppViewController: UIViewController, WKNavigationDelegate {
+    private var webView: WKWebView!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(BundleSchemeHandler(), forURLScheme: "mygo-app")
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = self
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+        ])
+        webView.load(URLRequest(url: URL(string: "mygo-app://localhost/index.html")!))
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        let url = navigationAction.request.url
+        decisionHandler(url?.scheme == "mygo-app" && url?.host == "localhost" ? .allow : .cancel)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    private func showError(_ error: Error) {
+        let label = UILabel()
+        label.text = "The app did not load: \(error.localizedDescription)"
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.frame = view.bounds.insetBy(dx: 24, dy: 24)
+        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(label)
+    }
+}
+
+// Only bundled resources are served, with an explicit WASM MIME type.
+// Synchronous delivery on WebKit's calling thread means stop has no queued work.
+final class BundleSchemeHandler: NSObject, WKURLSchemeHandler {
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url,
+              url.scheme == "mygo-app", url.host == "localhost",
+              let root = Bundle.main.resourceURL?.appendingPathComponent("Web").standardizedFileURL else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        let file = root.appendingPathComponent(url.path).standardizedFileURL
+        guard file.path.hasPrefix(root.path + "/"),
+              let data = try? Data(contentsOf: file) else {
+            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+        let mime: String
+        switch file.pathExtension {
+        case "wasm": mime = "application/wasm"
+        case "js": mime = "text/javascript"
+        case "html": mime = "text/html"
+        default: mime = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        }
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+            "Content-Type": mime,
+            "Content-Length": String(data.count)
+        ])!
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+}

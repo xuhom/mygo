@@ -1,0 +1,86 @@
+package dev.mygo.host;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.view.WindowInsets;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.Collections;
+
+// No native Go library: the bundled Go WASM runs inside the system WebView.
+public final class MainActivity extends Activity {
+    private WebView webView;
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
+        WebView.setWebContentsDebuggingEnabled(
+            (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0);
+        webView = new WebView(this);
+        webView.getSettings().setJavaScriptEnabled(true);
+        webView.getSettings().setDomStorageEnabled(true);
+        webView.getSettings().setAllowFileAccess(false);
+        webView.getSettings().setAllowContentAccess(false);
+        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return !isLocal(request);
+            }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (!isLocal(request) || !request.getMethod().equals("GET")) return notFound();
+                String path = request.getUrl().getPath();
+                if (path == null || !path.startsWith("/web/") || path.contains("..") || path.contains("\\")) return notFound();
+                String mime = path.endsWith(".wasm") ? "application/wasm" :
+                    path.endsWith(".js") ? "text/javascript" :
+                    path.endsWith(".html") ? "text/html" : "application/octet-stream";
+                try {
+                    return new WebResourceResponse(mime, mime.startsWith("text/") ? "utf-8" : null,
+                        200, "OK", Collections.emptyMap(), getAssets().open(path.substring(1)));
+                } catch (IOException error) {
+                    return notFound();
+                }
+            }
+        });
+        setContentView(webView);
+        // Target SDK 36 is edge-to-edge. Keep controls clear of system bars,
+        // cutouts and the software keyboard, including after rotation.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            webView.setOnApplyWindowInsetsListener((view, insets) -> {
+                android.graphics.Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return insets;
+            });
+        } else {
+            webView.setFitsSystemWindows(true);
+        }
+        webView.loadUrl("https://appassets.androidplatform.net/web/index.html");
+    }
+
+    private static boolean isLocal(WebResourceRequest request) {
+        return "https".equals(request.getUrl().getScheme()) &&
+            "appassets.androidplatform.net".equals(request.getUrl().getHost()) &&
+            request.getUrl().getPort() == -1;
+    }
+
+    private static WebResourceResponse notFound() {
+        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+            Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+    }
+
+    @Override protected void onPause() {
+        webView.onPause();
+        super.onPause();
+    }
+    @Override protected void onResume() {
+        super.onResume();
+        webView.onResume();
+    }
+    @Override protected void onDestroy() {
+        webView.destroy();
+        super.onDestroy();
+    }
+}

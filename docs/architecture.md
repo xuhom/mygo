@@ -693,6 +693,10 @@ features GTK 4 lacks become X11-only code beside it.
 
 ### Browsers (`internal/web`)
 
+Experimental [mobile packaging](mobile.md) places this backend in a system
+WebView hosted by UIKit or an Android Activity. It adds only CLI templates
+and packaging code, not native Go mobile backends or desktop dependencies.
+
 With `GOOS=js GOARCH=wasm`, `backend_js.go` picks `internal/web`, which
 shows windows of native UI (`WindowOptions.Surface`) on a page; windows of
 web pages, menus, trays, notifications, global shortcuts and file dialogs
